@@ -1,5 +1,3 @@
-import os
-os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
 import streamlit as st
 import requests
 import numpy as np
@@ -18,13 +16,12 @@ st.set_page_config(
 # Custom CSS
 st.markdown("""
 <style>
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
 .main-header {font-family: 'Inter', sans-serif; font-size: 2.8rem !important; font-weight: 700 !important; 
               background: linear-gradient(135deg, #1e3a8a 0%, #3b82f6 100%); -webkit-background-clip: text; 
               -webkit-text-fill-color: transparent; text-align: center; margin-bottom: 2rem !important;}
 .metric-card {background: linear-gradient(145deg, #667eea 0%, #764ba2 100%); padding: 1.5rem; 
               border-radius: 16px; color: white; box-shadow: 0 10px 30px rgba(0,0,0,0.2); 
-              text-align: center; margin: 0.5rem;}
+              text-align: center;}
 .best-method {background: linear-gradient(145deg, #10b981 0%, #059669 100%) !important;}
 </style>
 """, unsafe_allow_html=True)
@@ -34,12 +31,9 @@ BIAYA_PER_KM_DEFAULT = 12000
 BIAYA_PER_JAM_DEFAULT = 50000
 KAPASITAS_TRUK_DEFAULT = 4500
 
-FLOOD_COLORS = {'high': '#dc2626', 'medium': '#f97316', 'low': '#eab308', 'safe': '#059669'}
-
 # ==========================================
-# VRP SOLVER - 6 ALGORITMA
+# VRP SOLVER CLASS (NO CACHE)
 # ==========================================
-@st.cache_data
 class VRP_MasterSolver:
     def __init__(self, dist_matrix, demands, capacity):
         self.dist_matrix = dist_matrix
@@ -129,14 +123,16 @@ class VRP_MasterSolver:
         return self.solve_cheapest_insertion()
 
 # ==========================================
-# WEATHER & DISTANCE
+# UTILITIES (NO CACHE)
 # ==========================================
-@st.cache_data(ttl=1800)
 def get_weather_forecast(locations_df):
     weather_data = {}
     base_url = "https://api.open-meteo.com/v1/forecast"
     
+    progress_bar = st.progress(0)
     for idx, row in locations_df.iterrows():
+        progress_bar.progress((idx + 1) / len(locations_df))
+        
         params = {
             'latitude': row['Latitude'], 'longitude': row['Longitude'],
             'hourly': 'precipitation,precipitation_probability', 
@@ -169,9 +165,9 @@ def get_weather_forecast(locations_df):
             }
         except:
             weather_data[idx] = {'avg_precip': 0, 'max_prob': 0, 'flood_level': "❓ N/A"}
+    progress_bar.empty()
     return weather_data
 
-@st.cache_data
 def get_distance_matrix(locations_df):
     n = len(locations_df)
     dist_matrix = np.zeros((n, n))
@@ -195,9 +191,9 @@ def get_distance_matrix(locations_df):
 # ==========================================
 # MAIN APP
 # ==========================================
-st.markdown('<h1 class="main-header">🚛 VRP Banjir Live Pro<br><small>6 Algoritma Expert + Cuaca Real-time</small></h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🚛 VRP Banjir Live Pro<br><small>6 Algoritma VRP + Cuaca Real-time</small></h1>', unsafe_allow_html=True)
 
-# Default locations
+# Default data
 if 'locations_df' not in st.session_state:
     default_data = {
         'ID': list(range(11)),
@@ -216,7 +212,6 @@ if 'locations_df' not in st.session_state:
 with st.sidebar:
     st.markdown("## ⚙️ **Konfigurasi**")
     
-    # Location editor
     edited_df = st.data_editor(
         st.session_state.locations_df, 
         num_rows="dynamic",
@@ -232,7 +227,7 @@ with st.sidebar:
     
     kapasitas = st.slider("Kapasitas Truk (kg)", 1000, 15000, 4500)
     biaya_km = st.number_input("Biaya per KM (Rp)", 5000, 50000, 12000)
-    kecepatan = st.slider("Kecepatan Rata-rata (km/jam)", 30, 80, 50)
+    kecepatan = st.slider("Kecepatan (km/jam)", 30, 80, 50)
     
     if st.button("🚀 **JALANKAN OPTIMASI**", type="primary", use_container_width=True):
         st.session_state.run_optimization = True
@@ -243,7 +238,7 @@ with st.sidebar:
 
 # EXECUTION
 if st.session_state.get('run_optimization', False) and len(st.session_state.locations_df) > 1:
-    with st.spinner("🔄 Menghitung 6 algoritma VRP + cuaca real-time..."):
+    with st.spinner("🔄 Menghitung 6 algoritma VRP + cuaca..."):
         locations = st.session_state.locations_df.reset_index(drop=True)
         demands = locations['Demand_kg'].tolist()
         dist_matrix = get_distance_matrix(locations)
@@ -260,7 +255,7 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
             'Arbitrary Insertion': solver.solve_arbitrary_insertion()
         }
         
-        # Find best algorithm
+        # Analyze results
         method_analysis = {}
         best_method = None
         best_cost = float('inf')
@@ -294,39 +289,39 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
                 st.session_state.locations = locations
                 st.session_state.dist_matrix = dist_matrix
 
-    # DISPLAY RESULTS
-    st.markdown("## 🏆 **HASIL OPTIMASI TERBAIK**")
-    
+    # RESULTS DISPLAY
+    st.markdown("## 🏆 **HASIL OPTIMASI**")
     col1, col2, col3, col4 = st.columns(4)
+    
     with col1:
         st.markdown(f'''
         <div class="metric-card best-method">
-            <h3 style="margin:0;">{best_method}</h3>
-            <h2 style="margin:0;">🥇 #1</h2>
+            <h3>{best_method}</h3>
+            <h2>🥇 #1</h2>
         </div>
         ''', unsafe_allow_html=True)
     
     with col2:
-        st.metric("📏 Total Jarak", f"{st.session_state.best_result['total_distance']:.1f} km")
+        st.metric("📏 Jarak Total", f"{st.session_state.best_result['total_distance']:.1f} km")
     with col3:
-        st.metric("💰 Total Biaya", f"Rp {best_cost:,.0f}")
+        st.metric("💰 Biaya Total", f"Rp {best_cost:,.0f}")
     with col4:
-        st.metric("🚛 Jumlah Truk", st.session_state.best_result['num_trucks'])
+        st.metric("🚛 Truk Dibutuhkan", st.session_state.best_result['num_trucks'])
 
-    # Comparison table
-    st.markdown("### 📊 Perbandingan 6 Algoritma")
+    # Comparison
+    st.markdown("## 📊 **Perbandingan 6 Algoritma**")
     comparison_data = []
     for method, metrics in method_analysis.items():
         comparison_data.append({
-            'Algoritma': method,
-            'Biaya Total': f"Rp {metrics['total_cost']:,.0f}",
-            'Jarak Total': f"{metrics['total_distance']:.1f} km",
-            'Jumlah Truk': metrics['num_trucks']
+            'Algoritma': method[:15],
+            'Biaya': f"Rp {metrics['total_cost']:,.0f}",
+            'Jarak': f"{metrics['total_distance']:.1f} km",
+            'Truk': metrics['num_trucks']
         })
     st.dataframe(pd.DataFrame(comparison_data), use_container_width=True)
 
-    # Best routes detail
-    st.markdown("### 🛣️ Rute Terbaik Detail")
+    # Best routes
+    st.markdown("## 🛣️ **Rute Terbaik**")
     best_routes = st.session_state.best_result['routes']
     route_details = []
     for i, route in enumerate(best_routes):
@@ -335,61 +330,56 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
                       for j in range(len(route_nodes)-1))
         route_names = [st.session_state.locations.iloc[n]['Nama'] for n in route_nodes]
         route_details.append({
-            'Truk': i+1,
+            'Truk': f"🚛 {i+1}",
             'Rute': ' → '.join(route_names),
             'Jarak': f"{distance:.1f} km"
         })
     st.dataframe(pd.DataFrame(route_details), use_container_width=True)
 
-    # Weather table
-    st.markdown("### 🌧️ Status Cuaca Real-time")
+    # Weather
+    st.markdown("## 🌧️ **Cuaca Real-time**")
     weather_display = []
     for i, row in st.session_state.locations.iterrows():
         wdata = st.session_state.weather_data[i]
         weather_display.append({
             'Lokasi': row['Nama'],
             'Demand': f"{row['Demand_kg']:,} kg",
-            'Cuaca': wdata['flood_level'],
-            'Curah Hujan': f"{wdata['avg_precip']} mm/jam"
+            'Status': wdata['flood_level'],
+            'Hujan': f"{wdata['avg_precip']} mm/jam"
         })
     st.dataframe(pd.DataFrame(weather_display), use_container_width=True)
 
-    # DOWNLOADS
-    st.markdown("### 📥 Download Laporan")
+    # Downloads
+    st.markdown("## 📥 **Download**")
     col1, col2 = st.columns(2)
-    
     with col1:
-        csv_routes = pd.DataFrame(route_details).to_csv(index=False)
         st.download_button(
-            "📊 CSV Rute Terbaik",
-            csv_routes,
-            f"vrp_rute_terbaik_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            "📊 CSV Rute",
+            pd.DataFrame(route_details).to_csv(index=False),
+            f"vrp_rute_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
             "text/csv"
         )
-    
     with col2:
-        csv_weather = pd.DataFrame(weather_display).to_csv(index=False)
         st.download_button(
-            "🌧️ CSV Cuaca",
-            csv_weather,
+            "🌧️ CSV Cuaca", 
+            pd.DataFrame(weather_display).to_csv(index=False),
             f"vrp_cuaca_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
             "text/csv"
         )
 
-    st.success(f"✅ **OPTIMASI SELESAI!** 🎉\n🏆 **{best_method}** = TERBAIK\n💰 **Rp{best_cost:,.0f}** total biaya")
+    st.success(f"✅ **SELESAI!** {best_method} = TERBAIK | Rp{best_cost:,.0f}")
     st.balloons()
 
 else:
-    st.markdown("## 🚀 Selamat Datang!")
+    st.markdown("## 🚀 **VRP Banjir Live Pro**")
     st.info("""
-    **Cara Pakai:**
-    1. 📍 Edit lokasi di sidebar kiri
-    2. ⚙️ Atur kapasitas truk & biaya
+    **Cara Menggunakan:**
+    1. 📍 Edit lokasi di sidebar
+    2. ⚙️ Atur kapasitas & biaya truk
     3. 🚀 Klik **JALANKAN OPTIMASI**
-    4. 🏆 Lihat hasil 6 algoritma + cuaca
-    5. 📥 Download CSV laporan
+    4. 🏆 Lihat hasil terbaik dari 6 algoritma
+    5. 📥 Download CSV rute + cuaca
     """)
 
-# Footer
 st.markdown("---")
-st.markdown("*🚛 VRP Banjir Live Pro | 6 Algoritma VRP + Cuaca BMKG | © 2025*")
+st.markdown("*🚛 VRP Banjir Live Pro | 6 Algoritma + Open-Meteo | Streamlit Cloud 2025*")
