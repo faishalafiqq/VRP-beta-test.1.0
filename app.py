@@ -6,12 +6,9 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 import io
-import folium
-from streamlit_folium import st_folium
-import json
 
 st.set_page_config(
-    page_title="🚛 VRP Banjir Live Pro - Real Routes",
+    page_title="🚛 VRP Banjir Live Pro - Leaflet Map",
     page_icon="🚛",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -69,7 +66,6 @@ class VRP_MasterSolver:
         self.nodes = list(range(1, len(dist_matrix)))
     
     def solve_nn(self):
-        """1. Nearest Neighbor"""
         unvisited = set(self.nodes)
         routes = []
         while unvisited:
@@ -88,7 +84,6 @@ class VRP_MasterSolver:
         return routes
     
     def solve_cw(self):
-        """2. Clarke & Wright Savings"""
         routes = [[i] for i in self.nodes]
         savings = []
         for i in self.nodes:
@@ -113,7 +108,6 @@ class VRP_MasterSolver:
         return [r for r in routes if r]
     
     def solve_cheapest_insertion(self):
-        """3. Cheapest Insertion"""
         unvisited = set(self.nodes)
         routes = []
         while unvisited:
@@ -146,15 +140,12 @@ class VRP_MasterSolver:
         return routes
     
     def solve_nearest_insertion(self):
-        """4. Nearest Insertion"""
         return self._solve_insertion_general('nearest')
     
     def solve_farthest_insertion(self):
-        """5. Farthest Insertion"""
         return self._solve_insertion_general('farthest')
     
     def solve_arbitrary_insertion(self):
-        """6. Arbitrary Insertion"""
         return self._solve_insertion_general('arbitrary')
     
     def _solve_insertion_general(self, mode):
@@ -262,82 +253,97 @@ def get_distance_matrix(locations_df):
             dist_matrix[i][j] = R * c
     return dist_matrix
 
-def build_folium_map(locations, routes, weather_data, best_result):
-    """Build Folium Map with Routes + Weather"""
+def create_leaflet_map(locations, routes, weather_data):
+    """Create Leaflet HTML Map"""
     center_lat = locations['Latitude'].mean()
     center_lon = locations['Longitude'].mean()
     
-    m = folium.Map(
-        location=[center_lat, center_lon],
-        zoom_start=11,
-        tiles='OpenStreetMap'
-    )
-    
-    # Weather markers
+    # Build markers
+    markers_js = ""
     for i, row in locations.iterrows():
         w = weather_data.get(i, {})
-        color = w.get('flood_level', '🟢 AMAN')
+        color = '#dc2626' if '🔴' in w.get('flood_level', '') else '#f97316' if '🟠' in w.get('flood_level', '') else '#eab308' if '🟡' in w.get('flood_level', '') else '#059669'
         
-        if '🔴' in color:
-            icon_color = 'red'
-        elif '🟠' in color:
-            icon_color = 'orange'
-        elif '🟡' in color:
-            icon_color = 'yellow'
-        else:
-            icon_color = 'green'
-        
-        popup_text = f"""
-        <b>{row['Nama']}</b><br>
+        markers_js += f"""
+        L.circleMarker([{row['Latitude']}, {row['Longitude']}], {{
+            radius: 8,
+            fillColor: '{color}',
+            color: 'white',
+            weight: 2,
+            opacity: 1,
+            fillOpacity: 0.8
+        }}).bindPopup(`<b>{row['Nama']}</b><br>
         📦 {row['Demand_kg']:,} kg<br>
         🌧️ {w.get('avg_precip', 0)} mm/jam<br>
-        📊 {w.get('max_prob', 0)}%<br>
-        <b style="color:{FLOOD_COLORS.get(color.split()[0].lower(), '#059669')}">{color}</b>
+        {w.get('flood_level', '🟢 AMAN')}`).addTo(map);
         """
-        
-        folium.Marker(
-            [row['Latitude'], row['Longitude']],
-            popup=folium.Popup(popup_text, max_width=250),
-            icon=folium.Icon(color=icon_color, icon='info-sign'),
-            tooltip=row['Nama']
-        ).add_to(m)
     
-    # Routes polylines
-    colors_route = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+    # Build routes
+    routes_js = ""
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+    for route_idx, route in enumerate(routes):
+        route_coords = [[locations.iloc[n]['Latitude'], locations.iloc[n]['Longitude']] for n in [0] + route + [0]]
+        coords_str = str(route_coords).replace("'", "")
+        routes_js += f"""
+        L.polyline({route_coords}, {{
+            color: '{colors[route_idx % len(colors)]}',
+            weight: 4,
+            opacity: 0.8
+        }}).bindPopup('Truk {route_idx + 1}').addTo(map);
+        """
     
-    if 'routes' in best_result:
-        for route_idx, route in enumerate(best_result['routes']):
-            route_coords = []
-            for node_id in [0] + route + [0]:
-                loc = locations.iloc[node_id]
-                route_coords.append([loc['Latitude'], loc['Longitude']])
+    html_map = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+        <style>
+            body {{ margin: 0; padding: 0; }}
+            #map {{ position: absolute; top: 0; bottom: 0; width: 100%; }}
+            .legend {{
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: white;
+                padding: 15px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                z-index: 9999;
+                font-family: Inter, sans-serif;
+                font-size: 12px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="map"></div>
+        <div class="legend">
+            <b>🌧️ Legend Banjir</b><br>
+            <span style="color: #dc2626; font-weight: bold;">🔴 BANJIR BESAR</span><br>
+            <span style="color: #f97316; font-weight: bold;">🟠 GENANGAN</span><br>
+            <span style="color: #eab308; font-weight: bold;">🟡 HUJAN LEBAT</span><br>
+            <span style="color: #059669; font-weight: bold;">🟢 AMAN</span>
+        </div>
+        <script>
+            const map = L.map('map').setView([{center_lat}, {center_lon}], 11);
+            L.tileLayer('https://{{s}}.tile.openstreetmap.org/{{z}}/{{x}}/{{y}}.png', {{
+                maxZoom: 19,
+                attribution: '© OpenStreetMap'
+            }}).addTo(map);
             
-            folium.PolyLine(
-                route_coords,
-                color=colors_route[route_idx % len(colors_route)],
-                weight=4,
-                opacity=0.8,
-                popup=f"Truk {route_idx + 1}"
-            ).add_to(m)
-    
-    # Legend
-    legend_html = '''
-    <div style="position: fixed; bottom: 50px; left: 50px; width: 200px; 
-                background-color: white; border:2px solid grey; z-index:9999; 
-                font-size:12px; padding: 10px; border-radius: 8px;">
-    <p style="margin: 0 0 10px 0;"><b>🌧️ Legend Banjir</b></p>
-    <p style="margin: 5px 0; background: #dc2626; color: white; padding: 5px; text-align: center;">🔴 BANJIR</p>
-    <p style="margin: 5px 0; background: #f97316; color: white; padding: 5px; text-align: center;">🟠 GENANGAN</p>
-    <p style="margin: 5px 0; background: #eab308; color: black; padding: 5px; text-align: center;">🟡 HUJAN</p>
-    <p style="margin: 5px 0; background: #059669; color: white; padding: 5px; text-align: center;">🟢 AMAN</p>
-    </div>
-    '''
-    m.get_root().html.add_child(folium.Element(legend_html))
-    
-    return m
+            // Markers
+            {markers_js}
+            
+            // Routes
+            {routes_js}
+        </script>
+    </body>
+    </html>
+    """
+    return html_map
 
-# MAIN UI
-st.markdown('<h1 class="main-header">🚛 VRP Banjir Live Pro<br><small>6 Algoritma + Real Route Visualization + Flood Alert</small></h1>', unsafe_allow_html=True)
+# MAIN
+st.markdown('<h1 class="main-header">🚛 VRP Banjir Live Pro<br><small>6 Algoritma + Leaflet Map + Flood Alert + Excel</small></h1>', unsafe_allow_html=True)
 
 if 'locations_df' not in st.session_state:
     default_data = {
@@ -452,7 +458,6 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
                 best_method = method_name
                 st.session_state.best_result = method_analysis[method_name]
 
-    # RESULTS
     st.markdown("## 🏆 **HASIL OPTIMASI**")
     cols = st.columns(6)
     
@@ -470,9 +475,8 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
     with cols[4]: st.metric("🚛 Truk", st.session_state.best_result['truk'])
     with cols[5]: 
         risk = st.session_state.best_result['flood_risk']
-        st.metric("🌧️ Risk", "🟢 Rendah" if risk < 0.3 else "🟡 Sedang" if risk < 0.7 else "🔴 Tinggi")
+        st.metric("🌧️ Risk", "🟢" if risk < 0.3 else "🟡" if risk < 0.7 else "🔴")
 
-    # COMPARISON
     st.markdown("## 📊 **PERBANDINGAN 6 ALGORITMA**")
     comp_data = []
     for rank, (method, data) in enumerate(sorted(method_analysis.items(), key=lambda x: x[1]['cost']), 1):
@@ -481,16 +485,14 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
             "Biaya": f"Rp {int(data['cost']):,}",
             "Jarak": f"{data['dist']:.1f} km",
             "Truk": data['truk'],
-            "Flood Risk": f"{data['flood_risk']:.2f}"
+            "Flood": f"{data['flood_risk']:.2f}"
         })
     st.dataframe(pd.DataFrame(comp_data), height=300, use_container_width=True)
 
-    # BEST ROUTES
     st.markdown("## 🛣️ **RUTE TERBAIK**")
     st.dataframe(pd.DataFrame(st.session_state.best_result['details']), use_container_width=True)
 
-    # WEATHER
-    st.markdown("## 🌧️ **FORECAST BANJIR 6 JAM**")
+    st.markdown("## 🌧️ **FORECAST BANJIR**")
     weather_rows = []
     for i, row in locations.iterrows():
         w = weather_data[i]
@@ -503,20 +505,18 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
         })
     st.dataframe(pd.DataFrame(weather_rows), use_container_width=True)
 
-    # MAP WITH FOLIUM
-    st.markdown("## 🗺️ **PETA INTERAKTIF - RUTE + BANJIR**")
-    folium_map = build_folium_map(locations, st.session_state.best_result['routes'], weather_data, st.session_state.best_result)
-    st_folium(folium_map, width=1400, height=600)
+    st.markdown("## 🗺️ **PETA INTERAKTIF - LEAFLET**")
+    leaflet_html = create_leaflet_map(locations, st.session_state.best_result['routes'], weather_data)
+    st.components.v1.html(leaflet_html, height=600)
 
-    # DOWNLOAD
     st.markdown("## 📥 **DOWNLOAD**")
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        csv_comp = pd.DataFrame(comp_data).to_csv(index=False)
+        csv = pd.DataFrame(comp_data).to_csv(index=False)
         st.download_button(
-            "📊 CSV 6 Algo",
-            csv_comp,
+            "📊 CSV",
+            csv,
             f"vrp_6algo_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
             "text/csv",
             use_container_width=True
@@ -526,10 +526,10 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
             pd.DataFrame(comp_data).to_excel(writer, '6_Algoritma', index=False)
-            pd.DataFrame(st.session_state.best_result['details']).to_excel(writer, 'Rute_Terbaik', index=False)
+            pd.DataFrame(st.session_state.best_result['details']).to_excel(writer, 'Rute', index=False)
             pd.DataFrame(weather_rows).to_excel(writer, 'Cuaca', index=False)
         st.download_button(
-            "📈 Excel Full",
+            "📈 Excel",
             excel_buffer.getvalue(),
             f"vrp_full_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
             "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
@@ -537,12 +537,7 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
         )
     
     with col3:
-        summary = f"""VRP BANJIR LIVE PRO - {best_method}
-TGL: {datetime.now().strftime('%d/%m/%Y %H:%M')}
-Biaya: Rp{int(best_cost):,}
-Jarak: {st.session_state.best_result['dist']:.1f} km
-Truk: {st.session_state.best_result['truk']}
-"""
+        summary = f"VRP BANJIR - {best_method}\nBiaya: Rp{int(best_cost):,}\nJarak: {st.session_state.best_result['dist']:.1f} km\nTruk: {st.session_state.best_result['truk']}"
         st.download_button(
             "📄 Summary",
             summary,
@@ -558,4 +553,4 @@ else:
     st.info("👈 Edit lokasi → Klik JALANKAN")
 
 st.markdown("---")
-st.markdown('<div style="text-align:center;color:#64748b;padding:2rem">🚛 VRP 6 Algo + Folium Map | © 2025</div>', unsafe_allow_html=True)
+st.markdown('<div style="text-align:center;color:#64748b;padding:2rem">🚛 VRP 6 Algo + Leaflet Map + Excel | © 2025</div>', unsafe_allow_html=True)
