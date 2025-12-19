@@ -1,9 +1,7 @@
-streamlit==1.38.0
-plotly==5.24.1
-pandas==2.2.2
-numpy==2.1.1
-requests==2.32.3
-reportlab==4.2.2
-openpyxl==3.1.5
-Pillow==10.4.0
-python-dotenv==1.0.1
+streamlit
+pandas
+numpy
+plotly
+requests
+Pillow
+openpyxl
