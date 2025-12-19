@@ -1,24 +1,15 @@
 import os
 os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
 import streamlit as st
-import folium
-from folium import plugins
-from streamlit_folium import st_folium
 import requests
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 import io
-import base64
-from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
-from reportlab.lib.styles import getSampleStyleSheet
-from reportlab.lib import colors
-from reportlab.lib.units import inch
 import plotly.express as px
 import plotly.graph_objects as go
-import plotly.figure_factory as ff
 from PIL import Image as PILImage
+import openpyxl
 
 # Page config - Fullscreen responsive
 st.set_page_config(
@@ -54,6 +45,7 @@ st.markdown("""
         box-shadow: 0 10px 30px rgba(0,0,0,0.2);
         border: 1px solid rgba(255,255,255,0.1);
         transition: transform 0.3s ease;
+        text-align: center;
     }
     .metric-card:hover {
         transform: translateY(-5px);
@@ -85,7 +77,6 @@ st.markdown("""
 # ==========================================
 # KONFIGURASI GLOBAL & CONSTANTS
 # ==========================================
-TOMTOM_API_KEY = "DPKi6pXg3JG1rT3aKI8t7PWCzjYcxIof"
 BIAYA_PER_KM_DEFAULT = 12000
 BIAYA_PER_JAM_DEFAULT = 50000
 KAPASITAS_TRUK_DEFAULT = 4500
@@ -103,11 +94,11 @@ FLOOD_COLORS = {
 }
 
 # ==========================================
-# 6 ALGORITMA VRP - IDENTIK DENGAN KODE ASLI ANDA
+# 6 ALGORITMA VRP - FULL IMPLEMENTATION
 # ==========================================
 @st.cache_data
 class VRP_MasterSolver:
-    """6 Algoritma VRP Heuristic - Copy exact dari kode original"""
+    """6 Algoritma VRP Heuristic - Industry Standard"""
     
     def __init__(self, dist_matrix, demands, capacity):
         self.dist_matrix = dist_matrix
@@ -581,75 +572,82 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
     st.dataframe(weather_df, use_container_width=True)
 
     # ==========================================
-    # INTERACTIVE MAP
+    # INTERACTIVE MAP - PLOTLY (NO FOLIUM)
     # ==========================================
     st.markdown("## 🗺️ **PETA RUTE TERBAIK + BANJIR RISK**")
-    
-    m = folium.Map(
-        location=[locations['Latitude'].mean(), locations['Longitude'].mean()], 
-        zoom_start=11,
-        tiles='OpenStreetMap'
-    )
-    
-    # Location markers with flood colors
-    for i, row in locations.iterrows():
+
+    # Create Plotly Mapbox
+    fig_map = go.Figure()
+
+    # Add depot (Gudang)
+    fig_map.add_trace(go.Scattermapbox(
+        lat=[locations.iloc[0]['Latitude']], 
+        lon=[locations.iloc[0]['Longitude']],
+        mode='markers',
+        marker=dict(size=20, color='blue', symbol='square'),
+        name="🏭 Gudang Sentul",
+        text="Gudang Pusat",
+        hovertemplate="<b>🏭 Gudang Sentul</b><extra></extra>"
+    ))
+
+    # Add customer locations
+    for i in range(1, len(locations)):
+        row = locations.iloc[i]
         wdata = weather_data[i]
-        folium.Marker(
-            [row['Latitude'], row['Longitude']],
-            popup=f"""
-            <div style="width:250px">
-                <b style="color:{wdata['flood_color']}">{row['Nama']}</b><br>
-                📦 {row['Demand_kg']:,} kg<br>
-                🌧️ {wdata['avg_precip_mmh']} mm/jam | {wdata['max_prob_pct']}% prob<br>
-                <b>{wdata['flood_level']}</b><br>
-                <small>{wdata['flood_advice']}</small>
-            </div>
+        fig_map.add_trace(go.Scattermapbox(
+            lat=[row['Latitude']], 
+            lon=[row['Longitude']],
+            mode='markers+text',
+            marker=dict(
+                size=14,
+                color=wdata['flood_color'],
+                symbol='circle'
+            ),
+            text=[row['Nama'][:12]],
+            textposition="top center",
+            name=row['Nama'],
+            hovertemplate="""
+            <b>%{text}</b><br>
+            📦 %{customdata[0]} kg<br>
+            🌧️ %{customdata[1]}<br>
+            📊 %{customdata[2]}mm/jam | %{customdata[3]}%<br>
+            <extra></extra>
             """,
-            tooltip=f"{row['Nama']} - {wdata['flood_level']}",
-            icon=folium.Icon(
-                color=wdata['flood_color'].lstrip('#'), 
-                icon='map-marker-alt', 
-                prefix='fa',
-                icon_color='white'
-            )
-        ).add_to(m)
-    
-    # Best routes polyline
+            customdata=[[row['Demand_kg'], wdata['flood_level'], 
+                        wdata['avg_precip_mmh'], wdata['max_prob_pct']]]
+        ))
+
+    # Add best routes
     best_routes = st.session_state.best_result['routes']
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
-    
+    colors = ['red', 'blue', 'green', 'orange', 'purple', 'brown']
+
     for i, route in enumerate(best_routes):
-        route_coords = [[locations.iloc[n]['Latitude'], locations.iloc[n]['Longitude']] for n in [0] + route + [0]]
-        folium.PolyLine(
-            route_coords,
-            color=colors[i % len(colors)],
-            weight=8,
-            opacity=0.9,
-            popup=f"""
-            <b>🚛 Truk {i+1}</b><br>
-            💰 Rp{best_details_df.iloc[i]['Biaya_Rp']:,.0f}<br>
-            📏 {best_details_df.iloc[i]['Jarak_km']} km<br>
-            📦 {best_details_df.iloc[i]['Muatan_kg']} kg<br>
-            🚨 {best_details_df.iloc[i]['Flood_Max']}
-            """,
-            tooltip=f"Truk {i+1}"
-        ).add_to(m)
-    
-    # Legend
-    legend_html = '''
-    <div style="position: fixed; bottom: 50px; left: 50px; width: 220px; height: 140px; 
-                background-color: white; border:2px solid grey; z-index:9999; 
-                font-size:12px; padding: 12px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-    <h4 style="margin:0 0 10px 0;">🌧️ Legend Banjir</h4>
-    <div style="background:#dc2626;color:white;padding:6px;margin:3px 0;border-radius:6px;text-align:center;font-weight:600;">🔴 BANJIR BESAR</div>
-    <div style="background:#f97316;color:white;padding:6px;margin:3px 0;border-radius:6px;text-align:center;font-weight:600;">🟠 GENANGAN</div>
-    <div style="background:#eab308;color:black;padding:6px;margin:3px 0;border-radius:6px;text-align:center;font-weight:600;">🟡 HUJAN LEBAT</div>
-    <div style="background:#059669;color:white;padding:6px;margin:3px 0;border-radius:6px;text-align:center;font-weight:600;">🟢 AMAN</div>
-    </div>
-    '''
-    m.get_root().html.add_child(folium.Element(legend_html))
-    
-    st_folium(m, width=1400, height=650)
+        route_coords = [[locations.iloc[n]['Latitude'], locations.iloc[n]['Longitude']] 
+                       for n in [0] + route + [0]]
+        lats, lons = zip(*route_coords)
+        
+        fig_map.add_trace(go.Scattermapbox(
+            lat=list(lats), lon=list(lons),
+            mode='lines+markers',
+            line=dict(width=8, color=colors[i % len(colors)]),
+            marker=dict(size=10),
+            name=f"🚛 Truk {i+1}",
+            hovertemplate=f"<b>🚛 Truk {i+1}</b><br>📏 {best_details_df.iloc[i]['Jarak_km']}km<br>💰 Rp{best_details_df.iloc[i]['Biaya_Rp']:,.0f}<br>🚨 {best_details_df.iloc[i]['Flood_Max']}<extra></extra>"
+        ))
+
+    fig_map.update_layout(
+        title="🗺️ Peta Interaktif - Rute Terbaik + Risiko Banjir",
+        mapbox=dict(
+            style="open-street-map",  # GRATIS - No token needed
+            center=dict(lat=locations['Latitude'].mean(), lon=locations['Longitude'].mean()),
+            zoom=11
+        ),
+        height=650,
+        showlegend=True,
+        hovermode='closest'
+    )
+
+    st.plotly_chart(fig_map, use_container_width=True)
 
     # ==========================================
     # ADVANCED ANALYTICS CHARTS
@@ -685,7 +683,7 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
         ))
         fig2.update_layout(title="🌧️ **Flood Risk Score per Algoritma**", height=450, showlegend=False, xaxis_tickangle=45)
         st.plotly_chart(fig2, use_container_width=True)
-    
+
     # ==========================================
     # DOWNLOAD CENTER
     # ==========================================
@@ -721,50 +719,28 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
         )
     
     with col3:
-        # PDF Executive Summary
-        def create_executive_pdf():
-            buffer = io.BytesIO()
-            doc = SimpleDocTemplate(buffer, pagesize=letter)
-            story = []
-            styles = getSampleStyleSheet()
-            
-            # Title
-            title = Paragraph(f"🏆 VRP Optimasi - {best_method} TERBAIK", styles['Title'])
-            story.append(title)
-            story.append(Spacer(1, 20))
-            
-            # Executive summary table
-            summary_data = [
-                ['METRIK', 'NILAI', 'STATUS'],
-                ['Algoritma Terbaik', best_method, '🥇 #1'],
-                ['Total Biaya', f'Rp{best_metrics["total_cost"]:,.0f}', '💰'],
-                ['Total Jarak', f'{best_metrics["total_distance_km"]:.1f} km', '📏'],
-                ['Truk Dibutuhkan', str(best_metrics['num_trucks']), '🚛'],
-                ['Flood Risk', f'{best_metrics["flood_risk_score"]:.2f}', '🌧️']
-            ]
-            
-            table = Table(summary_data)
-            table.setStyle(TableStyle([
-                ('BACKGROUND', (0, 0), (-1, 0), colors.darkblue),
-                ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
-                ('ALIGN', (0, 0), (-1, -1), 'CENTER'),
-                ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
-                ('FONTSIZE', (0, 0), (-1, 0), 12),
-                ('BOTTOMPADDING', (0, 0), (-1, 0), 15),
-                ('BACKGROUND', (0, 1), (-1, -1), colors.lightgrey),
-                ('GRID', (0, 0), (-1, -1), 1, colors.black),
-                ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.lightgrey])
-            ]))
-            story.append(table)
-            
-            doc.build(story)
-            return buffer.getvalue()
-        
+        # Simple text summary for PDF replacement
+        summary_text = f"""
+VRP BANJIR LIVE PRO - EXECUTIVE SUMMARY
+========================================
+TANGGAL: {datetime.now().strftime('%d/%m/%Y %H:%M WIB')}
+ALGORITMA TERBAIK: {best_method}
+
+METRIK UTAMA:
+- Total Biaya: Rp{best_metrics['total_cost']:,.0f}
+- Total Jarak: {best_metrics['total_distance_km']:.1f} km  
+- Truk Dibutuhkan: {best_metrics['num_trucks']}
+- Total Waktu: {best_metrics['total_time_hours']:.1f} jam
+- Flood Risk: {best_metrics['flood_risk_score']:.2f}
+
+RUTE TERBAIK:
+{chr(10).join([f"Truk {r['Truk']}: {r['Rute'][:100]}..." for r in best_details_df.to_dict('records')])}
+        """
         st.download_button(
-            label="📄 **PDF Executive Summary**",
-            data=create_executive_pdf(),
-            file_name=f"vrp_executive_{best_method}_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
-            mime="application/pdf",
+            label="📄 **TXT Executive Summary**",
+            data=summary_text,
+            file_name=f"vrp_executive_{best_method}_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+            mime="text/plain",
             use_container_width=True
         )
     
@@ -788,7 +764,7 @@ else:
     2. ⚙️ **Atur parameter** truk & biaya
     3. 🚀 **Klik OPTIMASI** → 6 algoritma jalan otomatis
     4. 🏆 **Lihat hasil terbaik** + peta interaktif
-    5. 📥 **Download** report PDF/Excel
+    5. 📥 **Download** report Excel/CSV
     """)
     
     st.markdown("""
@@ -796,8 +772,8 @@ else:
     • 6 Algoritma VRP ✅ Industry standard
     • Real-time banjir 6 jam ✅ Open-Meteo
     • Auto-terbaik berdasarkan biaya ✅
-    • Peta interaktif ✅ Folium
-    • Export lengkap ✅ PDF/Excel/CSV
+    • Peta interaktif ✅ Plotly Mapbox
+    • Export lengkap ✅ Excel/CSV/TXT
     """)
 
 # Footer
@@ -805,7 +781,7 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #64748b; padding: 2rem; font-family: Inter;'>
     🚛 **VRP Banjir Live Pro** | 6 Algoritma Expert | 
-    TomTom Traffic + Open-Meteo Weather | 
+    Open-Meteo Weather | Plotly Maps | 
     <a href='https://streamlit.io/cloud' target='_blank'>Streamlit Cloud</a> © 2025
 </div>
 """, unsafe_allow_html=True)
