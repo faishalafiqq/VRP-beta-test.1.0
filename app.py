@@ -1,20 +1,15 @@
 import os
 os.environ["STREAMLIT_SERVER_HEADLESS"] = "true"
 import streamlit as st
-import folium
-from folium import plugins
-from streamlit_folium import st_folium
 import requests
 import numpy as np
 import pandas as pd
 from datetime import datetime, timedelta
 import io
-import base64
 from reportlab.lib.pagesizes import letter
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer, Image
+from reportlab.platypus import SimpleDocTemplate, Table, TableStyle, Paragraph, Spacer
 from reportlab.lib.styles import getSampleStyleSheet
 from reportlab.lib import colors
-from reportlab.lib.units import inch
 import plotly.express as px
 import plotly.graph_objects as go
 import plotly.figure_factory as ff
@@ -79,6 +74,11 @@ st.markdown("""
         border-radius: 12px !important;
         box-shadow: 0 8px 25px rgba(0,0,0,0.1) !important;
     }
+    
+    #tomtom-map {
+        border-radius: 12px !important;
+        box-shadow: 0 8px 25px rgba(0,0,0,0.1) !important;
+    }
 </style>
 """, unsafe_allow_html=True)
 
@@ -103,7 +103,7 @@ FLOOD_COLORS = {
 }
 
 # ==========================================
-# 6 ALGORITMA VRP - IDENTIK DENGAN KODE ASLI ANDA
+# 6 ALGORITMA VRP - IDENTIK DENGAN KODE ASLI
 # ==========================================
 @st.cache_data
 class VRP_MasterSolver:
@@ -581,75 +581,138 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
     st.dataframe(weather_df, use_container_width=True)
 
     # ==========================================
-    # INTERACTIVE MAP
+    # TOMTOM INTERACTIVE MAP (GANTI FOLIUM)
     # ==========================================
     st.markdown("## 🗺️ **PETA RUTE TERBAIK + BANJIR RISK**")
     
-    m = folium.Map(
-        location=[locations['Latitude'].mean(), locations['Longitude'].mean()], 
-        zoom_start=11,
-        tiles='OpenStreetMap'
-    )
+    # Prepare data for JavaScript
+    center_lat = locations['Latitude'].mean()
+    center_lon = locations['Longitude'].mean()
+    locations_json = locations[['Latitude', 'Longitude', 'Nama', 'Demand_kg']].to_json(orient='records', date_format='iso')
+    weather_json = json.dumps(weather_data)
+    best_routes_json = json.dumps(st.session_state.best_result['routes'])
+    best_details_json = best_details_df.to_json(orient='records', date_format='iso')
     
-    # Location markers with flood colors
-    for i, row in locations.iterrows():
-        wdata = weather_data[i]
-        folium.Marker(
-            [row['Latitude'], row['Longitude']],
-            popup=f"""
-            <div style="width:250px">
-                <b style="color:{wdata['flood_color']}">{row['Nama']}</b><br>
-                📦 {row['Demand_kg']:,} kg<br>
-                🌧️ {wdata['avg_precip_mmh']} mm/jam | {wdata['max_prob_pct']}% prob<br>
-                <b>{wdata['flood_level']}</b><br>
-                <small>{wdata['flood_advice']}</small>
-            </div>
-            """,
-            tooltip=f"{row['Nama']} - {wdata['flood_level']}",
-            icon=folium.Icon(
-                color=wdata['flood_color'].lstrip('#'), 
-                icon='map-marker-alt', 
-                prefix='fa',
-                icon_color='white'
-            )
-        ).add_to(m)
+    tomtom_map_html = f"""
+    <div id="tomtom-map" style="width: 100%; height: 650px;"></div>
     
-    # Best routes polyline
-    best_routes = st.session_state.best_result['routes']
-    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+    <link rel="stylesheet" href="https://api.tomtom.com/maps-sdk-for-web/cjs/6.x/6.15.0/maps.css" />
+    <script src="https://api.tomtom.com/maps-sdk-for-web/cjs/6.x/6.15.0/maps-web.min.js"></script>
+    <script>
+        async function initTomTomMap() {{
+            const map = tt.map('tomtom-map', {{
+                key: '{TOMTOM_API_KEY}',
+                center: [{center_lon}, {center_lat}],
+                zoom: 11,
+                language: 'id-ID'
+            }});
+
+            // Location markers dengan flood colors
+            const locationsData = {locations_json};
+            const weatherData = {weather_json};
+            
+            locationsData.forEach((loc, idx) => {{
+                const wdata = weatherData[idx] || {{flood_color: '#059669', flood_level: '🟢 AMAN'}};
+                const marker = new tt.Marker({{
+                    color: wdata.flood_color || '#059669',
+                    draggable: false
+                }})
+                .setLngLat([loc.Longitude, loc.Latitude])
+                .addTo(map);
+                
+                marker.getElement().style.border = '3px solid white';
+                marker.getElement().style.borderRadius = '50%';
+                marker.getElement().style.boxShadow = '0 4px 12px rgba(0,0,0,0.3)';
+                
+                const popupContent = `
+                    <div style="min-width: 280px; padding: 15px; font-family: Inter, sans-serif; line-height: 1.4;">
+                        <h4 style="margin: 0 0 10px 0; color: ${{wdata.flood_color}}; font-weight: 700; font-size: 16px;">
+                            📍 ${{loc.Nama}}
+                        </h4>
+                        <div style="display: flex; justify-content: space-between; margin: 8px 0; font-size: 14px;">
+                            <span>📦 Demand:</span> 
+                            <b>${{parseInt(loc.Demand_kg).toLocaleString()}} kg</b>
+                        </div>
+                        <div style="background: #f8f9fa; padding: 12px; border-radius: 8px; margin: 12px 0;">
+                            <div style="font-weight: 600; margin-bottom: 4px;">🌧️ Cuaca 6 Jam</div>
+                            <div>🌧️ ${{wdata.avg_precip_mmh || 0}} mm/jam</div>
+                            <div>📊 Prob: ${{wdata.max_prob_pct || 0}}%</div>
+                            <div style="color: ${{wdata.flood_color}}; font-weight: 700; font-size: 15px; margin-top: 6px;">
+                                🚨 ${{wdata.flood_level || '🟢 AMAN'}}
+                            </div>
+                        </div>
+                        <div style="font-size: 13px; color: #666; background: #e8f4fd; padding: 8px; border-radius: 6px;">
+                            💡 ${{wdata.flood_advice || 'Pengiriman normal'}}
+                        </div>
+                    </div>`;
+                
+                marker.bindPopup(popupContent);
+            }});
+
+            // Best routes polylines
+            const bestRoutes = {best_routes_json};
+            const bestDetails = {best_details_json};
+            const routeColors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b'];
+            
+            bestRoutes.forEach((route, routeIdx) => {{
+                const routeCoords = [];
+                const fullRoute = [0, ...route, 0];
+                fullRoute.forEach(n => {{
+                    const loc = locationsData[n];
+                    if (loc) routeCoords.push([loc.Longitude, loc.Latitude]);
+                }});
+                
+                if (routeCoords.length > 1) {{
+                    const polyline = new tt.Polyline(routeCoords, {{
+                        color: routeColors[routeIdx % routeColors.length],
+                        width: 8,
+                        opacity: 0.9
+                    }}).addTo(map);
+                    
+                    const detail = bestDetails[routeIdx];
+                    polyline.bindPopup(`
+                        <div style="font-family: Inter, sans-serif; min-width: 250px;">
+                            <h4 style="color: ${{routeColors[routeIdx % routeColors.length]}}; margin: 0 0 12px 0; font-weight: 700;">
+                                🚛 Truk ${{routeIdx + 1}}
+                            </h4>
+                            <div style="display: flex; justify-content: space-between; margin: 6px 0;">
+                                <span>📏 Jarak:</span> <b>${{detail.Jarak_km}} km</b>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin: 6px 0;">
+                                <span>💰 Biaya:</span> <b>Rp ${{parseInt(detail.Biaya_Rp).toLocaleString()}}</b>
+                            </div>
+                            <div style="display: flex; justify-content: space-between; margin: 6px 0;">
+                                <span>📦 Muatan:</span> <b>${{detail.Muatan_kg}} kg</b>
+                            </div>
+                            <div style="color: #dc2626; font-weight: 700; font-size: 15px; margin-top: 8px; padding: 8px; background: #fee2e2; border-radius: 6px;">
+                                🚨 Flood Max: ${{detail.Flood_Max}}
+                            </div>
+                        </div>
+                    `);
+                }}
+            }});
+
+            // Legend
+            const legendHtml = `
+                <div style="position: fixed; bottom: 20px; left: 20px; width: 240px; height: 160px; 
+                           background-color: white; border:2px solid #ddd; z-index:9999; 
+                           font-size:13px; padding: 15px; border-radius: 12px; box-shadow: 0 8px 25px rgba(0,0,0,0.15);
+                           font-family: Inter, sans-serif;">
+                    <h4 style="margin:0 0 12px 0; font-size:15px; font-weight: 600;">🌧️ Legend Banjir</h4>
+                    <div style="background:#dc2626;color:white;padding:8px;margin:4px 0;border-radius:8px;text-align:center;font-weight:600;">🔴 BANJIR BESAR</div>
+                    <div style="background:#f97316;color:white;padding:8px;margin:4px 0;border-radius:8px;text-align:center;font-weight:600;">🟠 GENANGAN</div>
+                    <div style="background:#eab308;color:black;padding:8px;margin:4px 0;border-radius:8px;text-align:center;font-weight:600;">🟡 HUJAN LEBAT</div>
+                    <div style="background:#059669;color:white;padding:8px;margin:4px 0;border-radius:8px;text-align:center;font-weight:600;">🟢 AMAN</div>
+                </div>`;
+            document.body.insertAdjacentHTML('beforeend', legendHtml);
+        }}
+        
+        // Inisialisasi map
+        initTomTomMap();
+    </script>
+    """.replace('import json', 'const json = JSON;')  # Fix JSON issue
     
-    for i, route in enumerate(best_routes):
-        route_coords = [[locations.iloc[n]['Latitude'], locations.iloc[n]['Longitude']] for n in [0] + route + [0]]
-        folium.PolyLine(
-            route_coords,
-            color=colors[i % len(colors)],
-            weight=8,
-            opacity=0.9,
-            popup=f"""
-            <b>🚛 Truk {i+1}</b><br>
-            💰 Rp{best_details_df.iloc[i]['Biaya_Rp']:,.0f}<br>
-            📏 {best_details_df.iloc[i]['Jarak_km']} km<br>
-            📦 {best_details_df.iloc[i]['Muatan_kg']} kg<br>
-            🚨 {best_details_df.iloc[i]['Flood_Max']}
-            """,
-            tooltip=f"Truk {i+1}"
-        ).add_to(m)
-    
-    # Legend
-    legend_html = '''
-    <div style="position: fixed; bottom: 50px; left: 50px; width: 220px; height: 140px; 
-                background-color: white; border:2px solid grey; z-index:9999; 
-                font-size:12px; padding: 12px; border-radius: 12px; box-shadow: 0 4px 12px rgba(0,0,0,0.3);">
-    <h4 style="margin:0 0 10px 0;">🌧️ Legend Banjir</h4>
-    <div style="background:#dc2626;color:white;padding:6px;margin:3px 0;border-radius:6px;text-align:center;font-weight:600;">🔴 BANJIR BESAR</div>
-    <div style="background:#f97316;color:white;padding:6px;margin:3px 0;border-radius:6px;text-align:center;font-weight:600;">🟠 GENANGAN</div>
-    <div style="background:#eab308;color:black;padding:6px;margin:3px 0;border-radius:6px;text-align:center;font-weight:600;">🟡 HUJAN LEBAT</div>
-    <div style="background:#059669;color:white;padding:6px;margin:3px 0;border-radius:6px;text-align:center;font-weight:600;">🟢 AMAN</div>
-    </div>
-    '''
-    m.get_root().html.add_child(folium.Element(legend_html))
-    
-    st_folium(m, width=1400, height=650)
+    st.markdown(tomtom_map_html, unsafe_allow_html=True)
 
     # ==========================================
     # ADVANCED ANALYTICS CHARTS
@@ -685,7 +748,7 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
         ))
         fig2.update_layout(title="🌧️ **Flood Risk Score per Algoritma**", height=450, showlegend=False, xaxis_tickangle=45)
         st.plotly_chart(fig2, use_container_width=True)
-    
+
     # ==========================================
     # DOWNLOAD CENTER
     # ==========================================
@@ -796,7 +859,7 @@ else:
     • 6 Algoritma VRP ✅ Industry standard
     • Real-time banjir 6 jam ✅ Open-Meteo
     • Auto-terbaik berdasarkan biaya ✅
-    • Peta interaktif ✅ Folium
+    • Peta TomTom interaktif ✅ 
     • Export lengkap ✅ PDF/Excel/CSV
     """)
 
@@ -805,7 +868,7 @@ st.markdown("---")
 st.markdown("""
 <div style='text-align: center; color: #64748b; padding: 2rem; font-family: Inter;'>
     🚛 **VRP Banjir Live Pro** | 6 Algoritma Expert | 
-    TomTom Traffic + Open-Meteo Weather | 
+    TomTom Maps + Open-Meteo Weather | 
     <a href='https://streamlit.io/cloud' target='_blank'>Streamlit Cloud</a> © 2025
 </div>
 """, unsafe_allow_html=True)
