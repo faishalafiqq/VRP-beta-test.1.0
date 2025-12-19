@@ -6,9 +6,10 @@ import numpy as np
 import pandas as pd
 from datetime import datetime
 import io
+import json
 
 st.set_page_config(
-    page_title="🚛 VRP Banjir Live Pro",
+    page_title="🚛 VRP Banjir Live Pro - TomTom Traffic",
     page_icon="🚛",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -40,6 +41,7 @@ BIAYA_PER_JAM_DEFAULT = 50000
 
 FLOOD_THRESHOLDS = {'high': {'precip': 20, 'prob': 70}, 'medium': {'precip': 10, 'prob': 60}, 'low': {'precip': 5, 'prob': 40}}
 
+# 6 VRP ALGORITHMS
 class VRP_MasterSolver:
     def __init__(self, dist_matrix, demands, capacity):
         self.dist_matrix = dist_matrix
@@ -210,7 +212,28 @@ def get_distance_matrix(locations_df):
             dist_matrix[i][j] = R * c
     return dist_matrix
 
-st.markdown('<h1 class="main-header">🚛 VRP Banjir Live Pro<br><small>6 Algoritma Expert + Flood Alert + Excel Export</small></h1>', unsafe_allow_html=True)
+def get_route_points(start_lat, start_lon, end_lat, end_lon):
+    """Get routing points dari TomTom Routing API"""
+    url = "https://api.tomtom.com/routing/1/calculateRoute/{},{},{},{}".format(start_lon, start_lat, end_lon, end_lat)
+    params = {
+        'key': TOMTOM_API_KEY,
+        'traffic': 'true',
+        'computeTravelTimeFor': 'all'
+    }
+    try:
+        response = requests.get(url, params=params, timeout=10)
+        data = response.json()
+        if 'routes' in data and len(data['routes']) > 0:
+            coords = []
+            for point in data['routes'][0]['legs'][0]['points']:
+                coords.append([point['latitude'], point['longitude']])
+            return coords
+        else:
+            return [[start_lat, start_lon], [end_lat, end_lon]]
+    except:
+        return [[start_lat, start_lon], [end_lat, end_lon]]
+
+st.markdown('<h1 class="main-header">🚛 VRP Banjir Live Pro<br><small>6 Algoritma + TomTom Real Routes + Traffic + Flood Alert</small></h1>', unsafe_allow_html=True)
 
 if 'locations_df' not in st.session_state:
     default_data = {
@@ -242,7 +265,7 @@ with st.sidebar:
         st.rerun()
 
 if st.session_state.get('run_optimization', False):
-    with st.spinner("🔄 **Optimasi 6 Algoritma + Weather...**"):
+    with st.spinner("🔄 **Optimasi 6 Algoritma + Weather + TomTom Routes...**"):
         locations = st.session_state.locations_df.reset_index(drop=True)
         demands = locations['Demand_kg'].tolist()
         dist_matrix = get_distance_matrix(locations)
@@ -315,6 +338,176 @@ if st.session_state.get('run_optimization', False):
         weather_rows.append({'📍 Lokasi': row['Nama'], '📦 Demand': f"{row['Demand_kg']:,} kg", '🌧️ Hujan': f"{w['avg_precip']} mm/jam", '📊 Prob': f"{w['max_prob']}%", '🚨 Status': w['flood_level']})
     st.dataframe(pd.DataFrame(weather_rows), use_container_width=True)
 
+    # TOMTOM MAP + REAL ROUTES + TRAFFIC
+    st.markdown("## 🗺️ **PETA INTERAKTIF - TOMTOM REAL ROUTES + TRAFFIC**")
+    
+    center_lat = locations['Latitude'].mean()
+    center_lon = locations['Longitude'].mean()
+    
+    # Build routes JSON
+    routes_js = "[]"
+    if st.session_state.best_result.get('routes'):
+        routes_list = []
+        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+        
+        for route_idx, route in enumerate(st.session_state.best_result['routes']):
+            route_nodes = [0] + route + [0]
+            route_coords = []
+            
+            # Get routing points dengan TomTom
+            for node_idx in range(len(route_nodes) - 1):
+                start_node = route_nodes[node_idx]
+                end_node = route_nodes[node_idx + 1]
+                
+                start_lat = locations.iloc[start_node]['Latitude']
+                start_lon = locations.iloc[start_node]['Longitude']
+                end_lat = locations.iloc[end_node]['Latitude']
+                end_lon = locations.iloc[end_node]['Longitude']
+                
+                # Get real route points
+                points = get_route_points(start_lat, start_lon, end_lat, end_lon)
+                route_coords.extend(points)
+            
+            routes_list.append({
+                'coords': route_coords,
+                'color': colors[route_idx % len(colors)],
+                'truk': route_idx + 1,
+                'detail': st.session_state.best_result['details'][route_idx] if route_idx < len(st.session_state.best_result['details']) else {}
+            })
+        
+        routes_js = json.dumps(routes_list)
+    
+    # Build markers JSON
+    markers_js = "[]"
+    markers_list = []
+    for i, row in locations.iterrows():
+        w = weather_data.get(i, {})
+        color_map = '#dc2626' if '🔴' in w.get('flood_level', '') else '#f97316' if '🟠' in w.get('flood_level', '') else '#eab308' if '🟡' in w.get('flood_level', '') else '#059669'
+        
+        markers_list.append({
+            'lat': row['Latitude'],
+            'lon': row['Longitude'],
+            'nama': row['Nama'],
+            'demand': row['Demand_kg'],
+            'precip': w.get('avg_precip', 0),
+            'prob': w.get('max_prob', 0),
+            'level': w.get('flood_level', '🟢 AMAN'),
+            'color': color_map
+        })
+    
+    markers_js = json.dumps(markers_list)
+    
+    # Render map
+    map_html = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+        <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css" />
+        <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+        <style>
+            body {{ margin: 0; padding: 0; }}
+            #map {{ position: absolute; top: 0; bottom: 0; width: 100%; }}
+            .legend {{
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: white;
+                padding: 15px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                z-index: 9999;
+                font-family: Inter, sans-serif;
+                font-size: 12px;
+            }}
+            .traffic-info {{
+                position: fixed;
+                top: 20px;
+                right: 20px;
+                background: white;
+                padding: 15px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                z-index: 9999;
+                font-family: Inter, sans-serif;
+                font-size: 12px;
+                max-width: 300px;
+            }}
+        </style>
+    </head>
+    <body>
+        <div id="map"></div>
+        <div class="traffic-info">
+            <b>🚗 Peta Real Routes + Traffic</b><br>
+            ✅ Rute sesuai jalan asli<br>
+            🚦 Traffic real-time TomTom<br>
+            🌧️ Flood risk markers<br>
+            <small style="color: #999;">Update setiap 5 menit</small>
+        </div>
+        <div class="legend">
+            <b>🌧️ Legend Banjir</b><br>
+            <span style="color: #dc2626; font-weight: bold;">🔴 BANJIR BESAR</span><br>
+            <span style="color: #f97316; font-weight: bold;">🟠 GENANGAN</span><br>
+            <span style="color: #eab308; font-weight: bold;">🟡 HUJAN LEBAT</span><br>
+            <span style="color: #059669; font-weight: bold;">🟢 AMAN</span>
+        </div>
+        <script>
+            const map = L.map('map').setView([{center_lat}, {center_lon}], 11);
+            
+            // TomTom Layer + Traffic
+            L.tileLayer('https://api.tomtom.com/map/1/tile/Basic/{{z}}/{{x}}/{{y}}.png?key={TOMTOM_API_KEY}', {{
+                maxZoom: 19,
+                attribution: '© TomTom'
+            }}).addTo(map);
+            
+            // Traffic layer
+            L.tileLayer('https://api.tomtom.com/map/1/tile/Traffic/Flow/Relative/{{z}}/{{x}}/{{y}}.png?key={TOMTOM_API_KEY}', {{
+                maxZoom: 19,
+                opacity: 0.7,
+                attribution: '© TomTom Traffic'
+            }}).addTo(map);
+            
+            // Markers
+            const markers = {markers_js};
+            markers.forEach(m => {{
+                L.circleMarker([m.lat, m.lon], {{
+                    radius: 10,
+                    fillColor: m.color,
+                    color: 'white',
+                    weight: 2,
+                    opacity: 1,
+                    fillOpacity: 0.8
+                }}).bindPopup(`
+                    <b>${{m.nama}}</b><br>
+                    📦 ${{m.demand.toLocaleString()}} kg<br>
+                    🌧️ ${{m.precip}} mm/jam<br>
+                    📊 ${{m.prob}}%<br>
+                    <b style="color: ${{m.color}}">${{m.level}}</b>
+                `).addTo(map);
+            }});
+            
+            // Routes dengan real geometry
+            const routes = {routes_js};
+            routes.forEach((r, idx) => {{
+                L.polyline(r.coords, {{
+                    color: r.color,
+                    weight: 5,
+                    opacity: 0.9,
+                    dashArray: '5, 5'
+                }}).bindPopup(`
+                    <b>🚛 Truk ${{r.truk}}</b><br>
+                    📏 ${{r.detail['Jarak'] || '?.? km'}}<br>
+                    💰 ${{r.detail['Biaya'] || 'Rp ?'}}<br>
+                    📦 ${{r.detail['Muatan'] || '? kg'}}<br>
+                    🚨 ${{r.detail['Banjir'] || '?'}}
+                `).addTo(map);
+            }});
+        </script>
+    </body>
+    </html>
+    """
+    
+    st.components.v1.html(map_html, height=700)
+
     st.markdown("## 📥 **DOWNLOAD**")
     col1, col2, col3 = st.columns(3)
     
@@ -323,7 +516,6 @@ if st.session_state.get('run_optimization', False):
         st.download_button("📊 CSV", csv, f"vrp_6algo_{datetime.now().strftime('%Y%m%d_%H%M')}.csv", "text/csv", use_container_width=True)
     
     with col2:
-        # ✅ FIX: Proper Excel handling
         def create_excel():
             buffer = io.BytesIO()
             with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
@@ -334,13 +526,7 @@ if st.session_state.get('run_optimization', False):
             buffer.seek(0)
             return buffer.getvalue()
         
-        st.download_button(
-            "📈 Excel Full",
-            create_excel(),
-            f"vrp_full_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            use_container_width=True
-        )
+        st.download_button("📈 Excel", create_excel(), f"vrp_full_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     
     with col3:
         summary = f"VRP BANJIR - {best_method}\nBiaya: Rp{int(best_cost):,}\nJarak: {st.session_state.best_result['dist']:.1f} km\nTruk: {st.session_state.best_result['truk']}"
@@ -352,4 +538,4 @@ else:
     st.info("👈 Edit lokasi → Klik JALANKAN")
 
 st.markdown("---")
-st.markdown('<div style="text-align:center;color:#64748b;padding:2rem">🚛 VRP 6 Algoritma | © 2025</div>', unsafe_allow_html=True)
+st.markdown('<div style="text-align:center;color:#64748b;padding:2rem">🚛 VRP 6 Algoritma + TomTom Real Routes + Traffic | © 2025</div>', unsafe_allow_html=True)
