@@ -4,7 +4,6 @@ import streamlit as st
 import requests
 import numpy as np
 import pandas as pd
-import json
 from datetime import datetime
 import io
 
@@ -68,9 +67,7 @@ FLOOD_THRESHOLDS = {
     'low': {'precip': 5, 'prob': 40}
 }
 
-# ==========================================
-# 6 ALGORITMA VRP LENGKAP - NO CACHE
-# ==========================================
+# 6 ALGORITMA VRP CLASS
 class VRP_MasterSolver:
     def __init__(self, dist_matrix, demands, capacity):
         self.dist_matrix = dist_matrix
@@ -79,7 +76,7 @@ class VRP_MasterSolver:
         self.nodes = list(range(1, len(dist_matrix)))
     
     def solve_nn(self):
-        """1. Nearest Neighbor ⚡"""
+        """1. Nearest Neighbor"""
         unvisited = set(self.nodes)
         routes = []
         while unvisited:
@@ -98,7 +95,7 @@ class VRP_MasterSolver:
         return routes
     
     def solve_cw(self):
-        """2. Clarke & Wright ⭐"""
+        """2. Clarke & Wright Savings"""
         routes = [[i] for i in self.nodes]
         savings = []
         for i in self.nodes:
@@ -123,7 +120,7 @@ class VRP_MasterSolver:
         return [r for r in routes if r]
     
     def solve_cheapest_insertion(self):
-        """3. Cheapest Insertion 💎"""
+        """3. Cheapest Insertion"""
         unvisited = set(self.nodes)
         routes = []
         while unvisited:
@@ -211,8 +208,8 @@ class VRP_MasterSolver:
             routes.append(route)
         return routes
 
-# WEATHER - NO CACHE
 def get_weather_forecast(locations_df):
+    """Weather forecast - no cache"""
     weather_data = {}
     base_url = "https://api.open-meteo.com/v1/forecast"
     
@@ -255,8 +252,8 @@ def get_weather_forecast(locations_df):
     progress_bar.empty()
     return weather_data
 
-# DISTANCE MATRIX - NO CACHE  
 def get_distance_matrix(locations_df):
+    """Distance matrix - Haversine"""
     n = len(locations_df)
     dist_matrix = np.zeros((n, n))
     for i in range(n):
@@ -274,10 +271,10 @@ def get_distance_matrix(locations_df):
             dist_matrix[i][j] = R * c
     return dist_matrix
 
-# MAIN APP
-st.markdown('<h1 class="main-header">🚛 VRP Banjir Live Pro<br><small>6 Algoritma Expert + Real-time Flood + Excel Export</small></h1>', unsafe_allow_html=True)
+# MAIN UI
+st.markdown('<h1 class="main-header">🚛 VRP Banjir Live Pro<br><small>6 Algoritma VRP + Real-time Flood Risk + Excel Export</small></h1>', unsafe_allow_html=True)
 
-# DEFAULT DATA
+# Session state
 if 'locations_df' not in st.session_state:
     default_data = {
         'ID': list(range(11)),
@@ -292,7 +289,7 @@ if 'locations_df' not in st.session_state:
     }
     st.session_state.locations_df = pd.DataFrame(default_data)
 
-# SIDEBAR
+# SIDEBAR CONFIG
 with st.sidebar:
     st.markdown("## ⚙️ **KONFIGURASI**")
     
@@ -301,7 +298,7 @@ with st.sidebar:
         num_rows="dynamic",
         column_config={
             "ID": st.column_config.NumberColumn("ID", disabled=True),
-            "Demand_kg": st.column_config.NumberColumn("Demand kg", min_value=0, max_value=5000)
+            "Demand_kg": st.column_config.NumberColumn("Demand (kg)", min_value=0, max_value=5000)
         },
         use_container_width=True,
         hide_index=True
@@ -310,48 +307,58 @@ with st.sidebar:
     
     st.markdown("---")
     col1, col2 = st.columns(2)
-    with col1: kapasitas = st.slider("💪 Kapasitas Truk", 1000, 15000, KAPASITAS_TRUK_DEFAULT)
-    with col2: kecepatan = st.slider("🚗 Kecepatan rata", 30, 80, 50)
-    col1, col2 = st.columns(2)
-    with col1: biaya_km = st.number_input("💰 Biaya/KM", 5000, 50000, BIAYA_PER_KM_DEFAULT)
-    with col2: biaya_jam = st.number_input("⏰ Biaya/Jam", 20000, 150000, BIAYA_PER_JAM_DEFAULT)
+    with col1:
+        kapasitas = st.slider("💪 Kapasitas Truk (kg)", 1000, 15000, KAPASITAS_TRUK_DEFAULT)
+    with col2:
+        kecepatan = st.slider("🚗 Kecepatan Rata-rata (km/jam)", 30, 80, 50)
     
-    if st.button("🚀 **JALANKAN 6 ALGORITMA**", type="primary", use_container_width=True):
+    col1, col2 = st.columns(2)
+    with col1:
+        biaya_km = st.number_input("💰 Biaya per KM (Rp)", 5000, 50000, BIAYA_PER_KM_DEFAULT)
+    with col2:
+        biaya_jam = st.number_input("⏰ Biaya per Jam (Rp)", 20000, 150000, BIAYA_PER_JAM_DEFAULT)
+    
+    if st.button("🚀 **JALANKAN 6 ALGORITMA VRP**", type="primary", use_container_width=True):
         st.session_state.run_optimization = True
         st.session_state.kapasitas = kapasitas
+        st.session_state.kecepatan_rata = kecepatan
         st.session_state.biaya_km = biaya_km
         st.session_state.biaya_jam = biaya_jam
-        st.session_state.kecepatan_rata = kecepatan
         st.rerun()
 
-# EXECUTION
+# MAIN EXECUTION
 if st.session_state.get('run_optimization', False) and len(st.session_state.locations_df) > 1:
-    with st.spinner("🔄 **Running 6 VRP Algorithms + Weather Analysis...**"):
+    
+    with st.spinner("🔄 **Menjalankan 6 Algoritma VRP + Analisis Cuaca Banjir...**"):
         locations = st.session_state.locations_df.reset_index(drop=True)
         demands = locations['Demand_kg'].tolist()
-        dist_matrix = get_distance_matrix(locations)  # ✅ NO CACHE
-        weather_data = get_weather_forecast(locations)  # ✅ NO CACHE
         
-        solver = VRP_MasterSolver(dist_matrix, demands, st.session_state.kapasitas)  # ✅ NO CACHE
+        # Calculate distances and weather
+        dist_matrix = get_distance_matrix(locations)
+        weather_data = get_weather_forecast(locations)
+        
+        # Run all 6 algorithms
+        solver = VRP_MasterSolver(dist_matrix, demands, st.session_state.kapasitas)
         all_results = {
             'Nearest Neighbor ⚡': solver.solve_nn(),
-            'Clarke & Wright ⭐': solver.solve_cw(),
+            'Clarke-Wright ⭐': solver.solve_cw(),
             'Cheapest Insertion 💎': solver.solve_cheapest_insertion(),
             'Nearest Insertion': solver.solve_nearest_insertion(),
             'Farthest Insertion': solver.solve_farthest_insertion(),
             'Arbitrary Insertion': solver.solve_arbitrary_insertion()
         }
         
-        # ANALYSIS
+        # Analyze all results
         method_analysis = {}
         best_method = None
         best_cost = float('inf')
         
         for method_name, routes in all_results.items():
-            total_cost = total_dist = total_time = flood_score = 0
+            total_cost = total_dist = total_time = total_flood = 0
             route_details = []
             
             for r_idx, route in enumerate(routes):
+                # Route calculation
                 nodes = [0] + route + [0]
                 dist_m = sum(dist_matrix[nodes[j]][nodes[j+1]] for j in range(len(nodes)-1))
                 dist_km = dist_m / 1000
@@ -359,6 +366,7 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
                 cost = (dist_km * st.session_state.biaya_km) + (time_h * st.session_state.biaya_jam)
                 load = sum(demands[n] for n in route)
                 
+                # Flood risk
                 flood_levels = [weather_data.get(n, {}).get('flood_level', '🟢 AMAN') for n in route]
                 flood_max = max(flood_levels)
                 flood_sc = sum(1 if '🔴' in f else 0.5 if '🟠' in f else 0.25 if '🟡' in f else 0 for f in flood_levels)
@@ -366,8 +374,9 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
                 total_cost += cost
                 total_dist += dist_km
                 total_time += time_h
-                flood_score += flood_sc
+                total_flood += flood_sc
                 
+                # Route details
                 names = [locations.iloc[n]['Nama'] for n in nodes]
                 route_details.append({
                     'Truk': r_idx + 1,
@@ -380,36 +389,50 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
                 })
             
             method_analysis[method_name] = {
-                'cost': total_cost, 'dist': total_dist, 'time': total_time,
-                'truk': len(routes), 'details': route_details,
-                'flood_risk': flood_score / max(1, len(routes))
+                'cost': total_cost,
+                'dist': total_dist,
+                'time': total_time,
+                'truk': len(routes),
+                'details': route_details,
+                'flood_risk': total_flood / max(1, len(routes))
             }
             
+            # Track best
             if total_cost < best_cost:
                 best_cost = total_cost
                 best_method = method_name
                 st.session_state.best_result = method_analysis[method_name]
 
     # EXECUTIVE SUMMARY
-    st.markdown("## 🏆 **ALGORITMA TERBAIK**")
+    st.markdown("## 🏆 **HASIL OPTIMASI - ALGORITMA TERBAIK**")
     cols = st.columns(6)
+    
     with cols[0]:
         st.markdown(f"""
         <div class="metric-card best-method">
-            <h4 style="margin:0;font-size:1rem;">{best_method}</h4>
-            <h2 style="margin:0;">🥇 #1</h2>
+            <h4 style="margin:0;font-size:1.1rem;">{best_method}</h4>
+            <h2 style="margin:0;font-size:1.8rem;">🥇 #1</h2>
         </div>
         """, unsafe_allow_html=True)
-    with cols[1]: st.metric("📏 Jarak", f"{st.session_state.best_result['dist']:.1f} km")
-    with cols[2]: st.metric("💰 Biaya", f"Rp {int(best_cost):,}")
-    with cols[3]: st.metric("⏱️ Waktu", f"{st.session_state.best_result['time']:.1f} jam")
-    with cols[4]: st.metric("🚛 Truk", st.session_state.best_result['truk'])
-    with cols[5]: 
+    
+    with cols[1]:
+        st.metric("📏 Total Jarak", f"{st.session_state.best_result['dist']:.1f} km")
+    
+    with cols[2]:
+        st.metric("💰 Total Biaya", f"Rp {int(best_cost):,}")
+    
+    with cols[3]:
+        st.metric("⏱️ Total Waktu", f"{st.session_state.best_result['time']:.1f} jam")
+    
+    with cols[4]:
+        st.metric("🚛 Truk Dibutuhkan", st.session_state.best_result['truk'])
+    
+    with cols[5]:
         risk = st.session_state.best_result['flood_risk']
-        st.metric("🌧️ Flood Risk", f"{risk:.2f}", 
-                 delta="🟢" if risk < 0.3 else "🟡" if risk < 0.7 else "🔴")
+        risk_label = "🟢 RENDAH" if risk < 0.3 else "🟡 SEDANG" if risk < 0.7 else "🔴 TINGGI"
+        st.metric("🌧️ Risiko Banjir", risk_label)
 
-    # COMPARISON 6 ALGORITHMS
+    # 6 ALGORITHM COMPARISON
     st.markdown("## 📊 **PERBANDINGAN 6 ALGORITMA**")
     comp_data = []
     sorted_methods = sorted(method_analysis.items(), key=lambda x: x[1]['cost'])
@@ -419,100 +442,135 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
             "Biaya": f"Rp {int(data['cost']):,}",
             "Jarak": f"{data['dist']:.1f} km",
             "Truk": data['truk'],
-            "Flood": f"{data['flood_risk']:.2f}"
+            "Flood Risk": f"{data['flood_risk']:.2f}"
         })
-    st.dataframe(pd.DataFrame(comp_data), use_container_height=350)
+    st.dataframe(pd.DataFrame(comp_data), height=350, use_container_width=True)
 
-    # BEST ROUTES DETAIL
-    st.markdown("## 🛣️ **RUTE TERBAIK DETAIL**")
+    # BEST ROUTES
+    st.markdown("## 🛣️ **RUTE TERBAIK - DETAIL LENGKAP**")
     best_df = pd.DataFrame(st.session_state.best_result['details'])
     st.dataframe(best_df, use_container_width=True)
 
-    # WEATHER TABLE
-    st.markdown("## 🌧️ **FORECAST BANJIR 6 JAM**")
+    # WEATHER FORECAST
+    st.markdown("## 🌧️ **PRAKIRAAN CUACA & BANJIR - 6 JAM**")
     weather_rows = []
     for i, row in locations.iterrows():
         w = weather_data[i]
         weather_rows.append({
-            'Lokasi': row['Nama'],
-            'Demand': f"{row['Demand_kg']:,} kg",
-            'Hujan': f"{w['avg_precip']} mm/jam",
-            'Prob': f"{w['max_prob']}%",
-            'Status': w['flood_level']
+            '📍 Lokasi': row['Nama'],
+            '📦 Demand': f"{row['Demand_kg']:,} kg",
+            '🌧️ Hujan': f"{w['avg_precip']} mm/jam",
+            '📊 Probabilitas': f"{w['max_prob']}%",
+            '🚨 Status Banjir': w['flood_level']
         })
     st.dataframe(pd.DataFrame(weather_rows), use_container_width=True)
 
     # TOMTOM MAP
-    st.markdown("## 🗺️ **PETA RUTE + BANJIR RISK**")
+    st.markdown("## 🗺️ **PETA INTERAKTIF - RUTE & BANJIR RISK**")
     center_lat = locations['Latitude'].mean()
     center_lon = locations['Longitude'].mean()
     st.markdown(f"""
-    <div id="tomtom-map" style="width:100%;height:500px;"></div>
+    <div id="tomtom-map" style="width:100%;height:500px;border-radius:12px;"></div>
     <link rel="stylesheet" href="https://api.tomtom.com/maps-sdk-for-web/cjs/6.x/6.15.0/maps.css"/>
     <script src="https://api.tomtom.com/maps-sdk-for-web/cjs/6.x/6.15.0/maps-web.min.js"></script>
     <script>
-    tt.map('tomtom-map', {{key: '{TOMTOM_API_KEY}', center: [{center_lon}, {center_lat}], zoom: 11}});
+    tt.map('tomtom-map', {{
+        key: '{TOMTOM_API_KEY}', 
+        center: [{center_lon}, {center_lat}], 
+        zoom: 11,
+        language: 'id-ID'
+    }});
     </script>
     """, unsafe_allow_html=True)
 
-    # DOWNLOAD CENTER ✅ 6 ALGO + EXCEL
-    st.markdown("## 📥 **DOWNLOAD LENGKAP**")
+    # DOWNLOAD CENTER
+    st.markdown("## 📥 **DOWNLOAD REPORT LENGKAP**")
     col1, col2, col3 = st.columns(3)
     
     with col1:
-        csv_comp = pd.DataFrame(comp_data).to_csv(index=False)
+        csv_comparison = pd.DataFrame(comp_data).to_csv(index=False)
         st.download_button(
-            "📊 CSV 6 Algo", csv_comp,
-            f"vrp_6algo_comparison_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
-            "text/csv", use_container_width=True
+            label="📊 CSV Perbandingan 6 Algo",
+            data=csv_comparison,
+            file_name=f"vrp_6algo_comparison_{datetime.now().strftime('%Y%m%d_%H%M')}.csv",
+            mime="text/csv",
+            use_container_width=True
         )
     
     with col2:
         excel_buffer = io.BytesIO()
         with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-            pd.DataFrame(comp_data).to_excel(writer, '6_Algoritma', index=False)
-            best_df.to_excel(writer, f'{best_method.replace(" ", "_")}', index=False)
-            pd.DataFrame(weather_rows).to_excel(writer, 'Cuaca_Banjir', index=False)
-            locations.to_excel(writer, 'Lokasi_Raw', index=False)
+            pd.DataFrame(comp_data).to_excel(writer, sheet_name='Perbandingan_6_Algo', index=False)
+            best_df.to_excel(writer, sheet_name=f'Rute_{best_method.replace(" ", "_")}', index=False)
+            pd.DataFrame(weather_rows).to_excel(writer, sheet_name='Cuaca_Banjir', index=False)
+            locations.to_excel(writer, sheet_name='Data_Lokasi', index=False)
         st.download_button(
-            "📈 Excel Full Report", excel_buffer.getvalue(),
-            f"vrp_6algo_full_{best_method}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
-            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            label="📈 Excel Full Report (4 Sheet)",
+            data=excel_buffer.getvalue(),
+            file_name=f"vrp_full_report_{best_method}_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             use_container_width=True
         )
     
     with col3:
-        summary = f"""VRP 6 ALGORITMA - {best_method}
-TGL: {datetime.now().strftime('%d/%m/%Y %H:%M WIB')}
-Biaya Terbaik: Rp{int(best_cost):,}
-Jarak: {st.session_state.best_result['dist']:.1f} km
-Truk: {st.session_state.best_result['truk']}
-Flood Risk: {st.session_state.best_result['flood_risk']:.2f}
+        summary_text = f"""VRP BANJIR LIVE PRO - EXECUTIVE SUMMARY
+═══════════════════════════════════════════════════════════════
+TANGGAL: {datetime.now().strftime('%d/%m/%Y %H:%M WIB')}
+ALGORITMA TERBAIK: {best_method}
+
+📊 METRIK UTAMA:
+• Total Biaya: Rp{int(best_cost):,}
+• Total Jarak: {st.session_state.best_result['dist']:.1f} km
+• Total Waktu: {st.session_state.best_result['time']:.1f} jam
+• Truk Dibutuhkan: {st.session_state.best_result['truk']}
+• Flood Risk Score: {st.session_state.best_result['flood_risk']:.2f}
+
+🏆 RUTE TERBAIK ({best_method}):
 """
+        for detail in st.session_state.best_result['details']:
+            summary_text += f"• Truk {detail['Truk']}: {detail['Rute'][:80]}... | Rp{detail['Biaya'].replace('Rp ', '')} | {detail['Banjir']}\n"
+        
         st.download_button(
-            "📄 Summary", summary,
-            f"vrp_summary_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
-            "text/plain", use_container_width=True
+            label="📄 Executive Summary TXT",
+            data=summary_text,
+            file_name=f"vrp_executive_summary_{datetime.now().strftime('%Y%m%d_%H%M')}.txt",
+            mime="text/plain",
+            use_container_width=True
         )
     
-    st.success(f"✅ **OPTIMASI 6 ALGORITMA SELESAI!** 🏆 {best_method} = TERBAIK | Rp{int(best_cost):,}")
+    st.markdown("---")
+    st.success(f"""
+    ✅ **OPTIMASI 6 ALGORITMA SELESAI!**
+    🏆 **{best_method}** = ALGORITMA TERBAIK
+    💰 **Total Biaya: Rp{int(best_cost):,}**
+    📱 **Share link ini ke tim logistik!**
+    """)
     st.balloons()
 
 else:
-    st.markdown("## 🚀 **VRP Banjir Live Pro - 6 Algoritma**")
+    st.markdown("## 🚀 **Selamat Datang di VRP Banjir Live Pro**")
     st.info("""
-    **Cara pakai:**
-    1. 📍 **Edit lokasi** di sidebar (koordinat + demand)
-    2. ⚙️ **Atur parameter** truk & biaya
-    3. 🚀 **JALANKAN 6 ALGORITMA** 
-    4. 🏆 **Auto pilih terbaik** + peta
-    5. 📥 **Excel lengkap 4 sheet**
+    **📋 Cara Menggunakan:**
+    1. 📍 **Edit lokasi** di sidebar (nama + koordinat GPS + demand kg)
+    2. ⚙️ **Atur parameter** truk, biaya, kecepatan
+    3. 🚀 **Klik JALANKAN 6 ALGORITMA VRP**
+    4. 🏆 **Lihat hasil terbaik** + peta interaktif TomTom
+    5. 📥 **Download Excel lengkap** (4 sheet: 6 algo + rute + cuaca + lokasi)
+    
+    **✨ Fitur Pro:**
+    • 6 Algoritma VRP industri standar
+    • Real-time prakiraan banjir 6 jam (Open-Meteo)
+    • Auto-pilih algoritma terbaik (biaya minimum)
+    • Peta interaktif TomTom Maps
+    • Export Excel/CSV profesional
     """)
 
 # Footer
 st.markdown("---")
 st.markdown("""
-<div style='text-align:center;color:#64748b;padding:2rem;font-family:Inter'>
-    🚛 VRP 6 Algoritma Pro | TomTom Maps + Open-Meteo | Streamlit Cloud © 2025
+<div style='text-align:center;color:#64748b;padding:2rem;font-family:Inter;font-size:0.9rem'>
+    🚛 **VRP Banjir Live Pro** | 6 Algoritma VRP Expert | 
+    TomTom Maps + Open-Meteo Weather | 
+    <a href='https://streamlit.io/cloud' target='_blank'>Powered by Streamlit Cloud</a> © 2025
 </div>
 """, unsafe_allow_html=True)
