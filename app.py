@@ -9,7 +9,7 @@ import io
 import json
 
 st.set_page_config(
-    page_title="🚛 VRP Banjir Live Pro - TomTom Traffic",
+    page_title="🚛 VRP Banjir Live Pro - Real Roads Mapping",
     page_icon="🚛",
     layout="wide",
     initial_sidebar_state="expanded"
@@ -212,28 +212,22 @@ def get_distance_matrix(locations_df):
             dist_matrix[i][j] = R * c
     return dist_matrix
 
-def get_route_points(start_lat, start_lon, end_lat, end_lon):
-    """Get routing points dari TomTom Routing API"""
-    url = "https://api.tomtom.com/routing/1/calculateRoute/{},{},{},{}".format(start_lon, start_lat, end_lon, end_lat)
-    params = {
-        'key': TOMTOM_API_KEY,
-        'traffic': 'true',
-        'computeTravelTimeFor': 'all'
-    }
+def get_real_route_osm(start_lat, start_lon, end_lat, end_lon):
+    """Get real routing dari OpenStreetMap Routing Engine (OSRM)"""
+    url = f"https://router.project-osrm.org/route/v1/driving/{start_lon},{start_lat};{end_lon},{end_lat}"
+    params = {'overview': 'full', 'geometries': 'geojson'}
     try:
         response = requests.get(url, params=params, timeout=10)
         data = response.json()
         if 'routes' in data and len(data['routes']) > 0:
-            coords = []
-            for point in data['routes'][0]['legs'][0]['points']:
-                coords.append([point['latitude'], point['longitude']])
-            return coords
+            coords = data['routes'][0]['geometry']['coordinates']
+            return [[c[1], c[0]] for c in coords]  # Convert to [lat, lon]
         else:
             return [[start_lat, start_lon], [end_lat, end_lon]]
     except:
         return [[start_lat, start_lon], [end_lat, end_lon]]
 
-st.markdown('<h1 class="main-header">🚛 VRP Banjir Live Pro<br><small>6 Algoritma + TomTom Real Routes + Traffic + Flood Alert</small></h1>', unsafe_allow_html=True)
+st.markdown('<h1 class="main-header">🚛 VRP Banjir Live Pro<br><small>6 Algoritma + OSM/ESRI Satellite + Real Roads + Flood</small></h1>', unsafe_allow_html=True)
 
 if 'locations_df' not in st.session_state:
     default_data = {
@@ -244,6 +238,9 @@ if 'locations_df' not in st.session_state:
         'Demand_kg': [0, 1500, 1200, 1000, 800, 700, 600, 900, 1100, 1000, 1300]
     }
     st.session_state.locations_df = pd.DataFrame(default_data)
+
+if 'map_layer' not in st.session_state:
+    st.session_state.map_layer = 'osm'
 
 with st.sidebar:
     st.markdown("## ⚙️ **KONFIGURASI**")
@@ -256,6 +253,17 @@ with st.sidebar:
     col1, col2 = st.columns(2)
     with col1: biaya_km = st.number_input("💰 Biaya/KM", 5000, 50000, BIAYA_PER_KM_DEFAULT)
     with col2: biaya_jam = st.number_input("⏰ Biaya/Jam", 20000, 150000, BIAYA_PER_JAM_DEFAULT)
+    
+    st.markdown("---")
+    st.markdown("## 🗺️ **MAP STYLE**")
+    map_choice = st.radio("Pilih peta:", ["🌍 OpenStreetMap", "🛰️ ESRI Satellite", "🗺️ OpenTopoMap"], horizontal=True)
+    if map_choice == "🌍 OpenStreetMap":
+        st.session_state.map_layer = 'osm'
+    elif map_choice == "🛰️ ESRI Satellite":
+        st.session_state.map_layer = 'esri'
+    else:
+        st.session_state.map_layer = 'topo'
+    
     if st.button("🚀 **JALANKAN 6 ALGORITMA**", type="primary", use_container_width=True):
         st.session_state.run_optimization = True
         st.session_state.kapasitas = kapasitas
@@ -265,7 +273,7 @@ with st.sidebar:
         st.rerun()
 
 if st.session_state.get('run_optimization', False):
-    with st.spinner("🔄 **Optimasi 6 Algoritma + Weather + TomTom Routes...**"):
+    with st.spinner("🔄 **Optimasi 6 Algoritma + Weather + Real Roads OSM...**"):
         locations = st.session_state.locations_df.reset_index(drop=True)
         demands = locations['Demand_kg'].tolist()
         dist_matrix = get_distance_matrix(locations)
@@ -338,23 +346,22 @@ if st.session_state.get('run_optimization', False):
         weather_rows.append({'📍 Lokasi': row['Nama'], '📦 Demand': f"{row['Demand_kg']:,} kg", '🌧️ Hujan': f"{w['avg_precip']} mm/jam", '📊 Prob': f"{w['max_prob']}%", '🚨 Status': w['flood_level']})
     st.dataframe(pd.DataFrame(weather_rows), use_container_width=True)
 
-    # TOMTOM MAP + REAL ROUTES + TRAFFIC
-    st.markdown("## 🗺️ **PETA INTERAKTIF - TOMTOM REAL ROUTES + TRAFFIC**")
+    # MAP OSM + ESRI + REAL ROADS
+    st.markdown("## 🗺️ **PETA INTERAKTIF - OSM/ESRI + REAL ROADS**")
     
     center_lat = locations['Latitude'].mean()
     center_lon = locations['Longitude'].mean()
     
-    # Build routes JSON
-    routes_js = "[]"
+    # Build routes dengan real geometry
+    routes_list = []
+    colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
+    
     if st.session_state.best_result.get('routes'):
-        routes_list = []
-        colors = ['#1f77b4', '#ff7f0e', '#2ca02c', '#d62728', '#9467bd', '#8c564b']
-        
         for route_idx, route in enumerate(st.session_state.best_result['routes']):
             route_nodes = [0] + route + [0]
             route_coords = []
             
-            # Get routing points dengan TomTom
+            # Get real route points dari OSRM
             for node_idx in range(len(route_nodes) - 1):
                 start_node = route_nodes[node_idx]
                 end_node = route_nodes[node_idx + 1]
@@ -365,7 +372,7 @@ if st.session_state.get('run_optimization', False):
                 end_lon = locations.iloc[end_node]['Longitude']
                 
                 # Get real route points
-                points = get_route_points(start_lat, start_lon, end_lat, end_lon)
+                points = get_real_route_osm(start_lat, start_lon, end_lat, end_lon)
                 route_coords.extend(points)
             
             routes_list.append({
@@ -374,11 +381,8 @@ if st.session_state.get('run_optimization', False):
                 'truk': route_idx + 1,
                 'detail': st.session_state.best_result['details'][route_idx] if route_idx < len(st.session_state.best_result['details']) else {}
             })
-        
-        routes_js = json.dumps(routes_list)
     
     # Build markers JSON
-    markers_js = "[]"
     markers_list = []
     for i, row in locations.iterrows():
         w = weather_data.get(i, {})
@@ -395,9 +399,35 @@ if st.session_state.get('run_optimization', False):
             'color': color_map
         })
     
+    routes_js = json.dumps(routes_list)
     markers_js = json.dumps(markers_list)
     
-    # Render map
+    # Select basemap
+    if st.session_state.map_layer == 'esri':
+        basemap_js = """
+        L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+            maxZoom: 19,
+            attribution: '© Esri'
+        }).addTo(map);
+        """
+        layer_name = "🛰️ ESRI Satellite"
+    elif st.session_state.map_layer == 'topo':
+        basemap_js = """
+        L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+            maxZoom: 17,
+            attribution: '© OpenTopoMap'
+        }).addTo(map);
+        """
+        layer_name = "🗺️ OpenTopoMap"
+    else:
+        basemap_js = """
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            maxZoom: 19,
+            attribution: '© OpenStreetMap'
+        }).addTo(map);
+        """
+        layer_name = "🌍 OpenStreetMap"
+    
     map_html = f"""
     <!DOCTYPE html>
     <html>
@@ -407,19 +437,7 @@ if st.session_state.get('run_optimization', False):
         <style>
             body {{ margin: 0; padding: 0; }}
             #map {{ position: absolute; top: 0; bottom: 0; width: 100%; }}
-            .legend {{
-                position: fixed;
-                bottom: 20px;
-                right: 20px;
-                background: white;
-                padding: 15px;
-                border-radius: 8px;
-                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
-                z-index: 9999;
-                font-family: Inter, sans-serif;
-                font-size: 12px;
-            }}
-            .traffic-info {{
+            .info {{
                 position: fixed;
                 top: 20px;
                 right: 20px;
@@ -432,16 +450,28 @@ if st.session_state.get('run_optimization', False):
                 font-size: 12px;
                 max-width: 300px;
             }}
+            .legend {{
+                position: fixed;
+                bottom: 20px;
+                right: 20px;
+                background: white;
+                padding: 15px;
+                border-radius: 8px;
+                box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+                z-index: 9999;
+                font-family: Inter, sans-serif;
+                font-size: 12px;
+            }}
         </style>
     </head>
     <body>
         <div id="map"></div>
-        <div class="traffic-info">
-            <b>🚗 Peta Real Routes + Traffic</b><br>
-            ✅ Rute sesuai jalan asli<br>
-            🚦 Traffic real-time TomTom<br>
-            🌧️ Flood risk markers<br>
-            <small style="color: #999;">Update setiap 5 menit</small>
+        <div class="info">
+            <b>🗺️ {layer_name}</b><br>
+            ✅ Real roads dari OSM<br>
+            📍 Locations: {len(markers_list)}<br>
+            🚚 Routes: {len(routes_list)}<br>
+            🌧️ Flood risk markers
         </div>
         <div class="legend">
             <b>🌧️ Legend Banjir</b><br>
@@ -453,36 +483,27 @@ if st.session_state.get('run_optimization', False):
         <script>
             const map = L.map('map').setView([{center_lat}, {center_lon}], 11);
             
-            // TomTom Layer + Traffic
-            L.tileLayer('https://api.tomtom.com/map/1/tile/Basic/{{z}}/{{x}}/{{y}}.png?key={TOMTOM_API_KEY}', {{
-                maxZoom: 19,
-                attribution: '© TomTom'
-            }}).addTo(map);
-            
-            // Traffic layer
-            L.tileLayer('https://api.tomtom.com/map/1/tile/Traffic/Flow/Relative/{{z}}/{{x}}/{{y}}.png?key={TOMTOM_API_KEY}', {{
-                maxZoom: 19,
-                opacity: 0.7,
-                attribution: '© TomTom Traffic'
-            }}).addTo(map);
+            // Basemap
+            {basemap_js}
             
             // Markers
             const markers = {markers_js};
             markers.forEach(m => {{
                 L.circleMarker([m.lat, m.lon], {{
-                    radius: 10,
+                    radius: 12,
                     fillColor: m.color,
                     color: 'white',
-                    weight: 2,
+                    weight: 3,
                     opacity: 1,
-                    fillOpacity: 0.8
+                    fillOpacity: 0.85
                 }}).bindPopup(`
-                    <b>${{m.nama}}</b><br>
-                    📦 ${{m.demand.toLocaleString()}} kg<br>
-                    🌧️ ${{m.precip}} mm/jam<br>
-                    📊 ${{m.prob}}%<br>
-                    <b style="color: ${{m.color}}">${{m.level}}</b>
-                `).addTo(map);
+                    <div style="font-family: Inter; font-size: 12px;">
+                        <b style="font-size: 14px;">${{m.nama}}</b><br>
+                        📦 ${{m.demand.toLocaleString()}} kg<br>
+                        🌧️ ${{m.precip}} mm/jam | ${{m.prob}}%<br>
+                        <b style="color: ${{m.color}}">${{m.level}}</b>
+                    </div>
+                `, {{maxWidth: 250}}).addTo(map);
             }});
             
             // Routes dengan real geometry
@@ -490,23 +511,46 @@ if st.session_state.get('run_optimization', False):
             routes.forEach((r, idx) => {{
                 L.polyline(r.coords, {{
                     color: r.color,
-                    weight: 5,
+                    weight: 6,
                     opacity: 0.9,
-                    dashArray: '5, 5'
+                    lineCap: 'round',
+                    lineJoin: 'round'
                 }}).bindPopup(`
-                    <b>🚛 Truk ${{r.truk}}</b><br>
-                    📏 ${{r.detail['Jarak'] || '?.? km'}}<br>
-                    💰 ${{r.detail['Biaya'] || 'Rp ?'}}<br>
-                    📦 ${{r.detail['Muatan'] || '? kg'}}<br>
-                    🚨 ${{r.detail['Banjir'] || '?'}}
-                `).addTo(map);
+                    <div style="font-family: Inter; font-size: 12px;">
+                        <b style="font-size: 14px; color: ${{r.color}}">🚛 Truk ${{r.truk}}</b><br>
+                        📏 ${{r.detail['Jarak'] || '?.? km'}}<br>
+                        ⏱️ ${{r.detail['Waktu'] || '?.? jam'}}<br>
+                        💰 ${{r.detail['Biaya'] || 'Rp ?'}}<br>
+                        📦 ${{r.detail['Muatan'] || '? kg'}}<br>
+                        🚨 ${{r.detail['Banjir'] || '?'}}
+                    </div>
+                `, {{maxWidth: 250}}).addTo(map);
+                
+                // Add route number label at middle point
+                if (r.coords.length > 0) {{
+                    const midPoint = r.coords[Math.floor(r.coords.length / 2)];
+                    L.marker(midPoint, {{
+                        icon: L.divIcon({{
+                            html: `<div style="background: ${{r.color}}; color: white; width: 30px; height: 30px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; font-size: 14px; box-shadow: 0 2px 6px rgba(0,0,0,0.3);">${{r.truk}}</div>`,
+                            iconSize: [30, 30],
+                            className: 'custom-marker'
+                        }})
+                    }}).addTo(map);
+                }}
             }});
+            
+            // Fit bounds
+            let group = new L.featureGroup();
+            markers.forEach(m => {{
+                group.addLayer(L.marker([m.lat, m.lon]));
+            }});
+            map.fitBounds(group.getBounds().pad(0.1));
         </script>
     </body>
     </html>
     """
     
-    st.components.v1.html(map_html, height=700)
+    st.components.v1.html(map_html, height=750)
 
     st.markdown("## 📥 **DOWNLOAD**")
     col1, col2, col3 = st.columns(3)
@@ -529,7 +573,7 @@ if st.session_state.get('run_optimization', False):
         st.download_button("📈 Excel", create_excel(), f"vrp_full_{datetime.now().strftime('%Y%m%d_%H%M')}.xlsx", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet", use_container_width=True)
     
     with col3:
-        summary = f"VRP BANJIR - {best_method}\nBiaya: Rp{int(best_cost):,}\nJarak: {st.session_state.best_result['dist']:.1f} km\nTruk: {st.session_state.best_result['truk']}"
+        summary = f"VRP BANJIR - {best_method}\nMap: {layer_name}\nBiaya: Rp{int(best_cost):,}\nJarak: {st.session_state.best_result['dist']:.1f} km\nTruk: {st.session_state.best_result['truk']}"
         st.download_button("📄 Summary", summary, f"vrp_{datetime.now().strftime('%Y%m%d_%H%M')}.txt", "text/plain", use_container_width=True)
     
     st.success(f"✅ **SELESAI!** {best_method} = TERBAIK | Rp{int(best_cost):,}")
@@ -538,4 +582,4 @@ else:
     st.info("👈 Edit lokasi → Klik JALANKAN")
 
 st.markdown("---")
-st.markdown('<div style="text-align:center;color:#64748b;padding:2rem">🚛 VRP 6 Algoritma + TomTom Real Routes + Traffic | © 2025</div>', unsafe_allow_html=True)
+st.markdown('<div style="text-align:center;color:#64748b;padding:2rem">🚛 VRP 6 Algo + OSM/ESRI Real Roads + Flood | © 2025</div>', unsafe_allow_html=True)
