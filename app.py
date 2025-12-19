@@ -67,15 +67,10 @@ FLOOD_THRESHOLDS = {
     'medium': {'precip': 10, 'prob': 60},
     'low': {'precip': 5, 'prob': 40}
 }
-FLOOD_COLORS = {
-    'high': '#dc2626', 'medium': '#f97316', 
-    'low': '#eab308', 'safe': '#059669'
-}
 
 # ==========================================
-# 6 ALGORITMA VRP LENGKAP
+# 6 ALGORITMA VRP LENGKAP - NO CACHE
 # ==========================================
-@st.cache_data
 class VRP_MasterSolver:
     def __init__(self, dist_matrix, demands, capacity):
         self.dist_matrix = dist_matrix
@@ -84,7 +79,7 @@ class VRP_MasterSolver:
         self.nodes = list(range(1, len(dist_matrix)))
     
     def solve_nn(self):
-        """1. Nearest Neighbor"""
+        """1. Nearest Neighbor ⚡"""
         unvisited = set(self.nodes)
         routes = []
         while unvisited:
@@ -103,7 +98,7 @@ class VRP_MasterSolver:
         return routes
     
     def solve_cw(self):
-        """2. Clarke & Wright Savings"""
+        """2. Clarke & Wright ⭐"""
         routes = [[i] for i in self.nodes]
         savings = []
         for i in self.nodes:
@@ -128,7 +123,7 @@ class VRP_MasterSolver:
         return [r for r in routes if r]
     
     def solve_cheapest_insertion(self):
-        """3. Cheapest Insertion"""
+        """3. Cheapest Insertion 💎"""
         unvisited = set(self.nodes)
         routes = []
         while unvisited:
@@ -195,7 +190,6 @@ class VRP_MasterSolver:
                     sel_node = min(cands, key=lambda c: min([self.dist_matrix[c][r] for r in route] + [self.dist_matrix[c][0]]))
                     check_list = [sel_node]
                 else:
-                    sel_node = cands[0]
                     check_list = cands[:3]
                 
                 best_cost = float('inf')
@@ -217,13 +211,12 @@ class VRP_MasterSolver:
             routes.append(route)
         return routes
 
-# UTILITIES
-@st.cache_data(ttl=1800)
+# WEATHER - NO CACHE
 def get_weather_forecast(locations_df):
     weather_data = {}
     base_url = "https://api.open-meteo.com/v1/forecast"
-    progress_bar = st.progress(0)
     
+    progress_bar = st.progress(0)
     for idx, row in locations_df.iterrows():
         progress_bar.progress((idx + 1) / len(locations_df))
         params = {
@@ -262,7 +255,7 @@ def get_weather_forecast(locations_df):
     progress_bar.empty()
     return weather_data
 
-@st.cache_data
+# DISTANCE MATRIX - NO CACHE  
 def get_distance_matrix(locations_df):
     n = len(locations_df)
     dist_matrix = np.zeros((n, n))
@@ -336,10 +329,10 @@ if st.session_state.get('run_optimization', False) and len(st.session_state.loca
     with st.spinner("🔄 **Running 6 VRP Algorithms + Weather Analysis...**"):
         locations = st.session_state.locations_df.reset_index(drop=True)
         demands = locations['Demand_kg'].tolist()
-        dist_matrix = get_distance_matrix(locations)
-        weather_data = get_weather_forecast(locations)
+        dist_matrix = get_distance_matrix(locations)  # ✅ NO CACHE
+        weather_data = get_weather_forecast(locations)  # ✅ NO CACHE
         
-        solver = VRP_MasterSolver(dist_matrix, demands, st.session_state.kapasitas)
+        solver = VRP_MasterSolver(dist_matrix, demands, st.session_state.kapasitas)  # ✅ NO CACHE
         all_results = {
             'Nearest Neighbor ⚡': solver.solve_nn(),
             'Clarke & Wright ⭐': solver.solve_cw(),
